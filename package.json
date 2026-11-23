@@ -1,0 +1,66 @@
+{
+  "name": "steno-app",
+  "productName": "STENO",
+  "version": "1.0.0",
+  "private": true,
+  "description": "STENO Desktop — нативное приложение для Windows, Linux и macOS поверх веб-версии STENO (расшифровка речи, Whisper + спикеры + LLM)",
+  "author": "lolobrigit",
+  "license": "MIT",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "prepare": "node scripts/make-icon.cjs",
+    "fetch-web": "node scripts/fetch-web.cjs",
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage deb",
+    "dist:mac": "electron-builder --mac dmg",
+    "dist:all": "npm run fetch-web && electron-builder -wlm"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.steno.desktop",
+    "productName": "STENO",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**",
+      "quickstart/**",
+      "web/dist/**",
+      "build/icon.png",
+      "!**/*.map"
+    ],
+    "asarUnpack": [],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "STENO-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Audio",
+      "artifactName": "STENO-${version}.${ext}"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.productivity",
+      "artifactName": "STENO-${version}.${ext}",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    }
+  }
+}

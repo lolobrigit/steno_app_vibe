@@ -1,0 +1,8 @@
+node_modules/
+release/
+web/dist/
+.web-src/
+*.log
+.DS_Store
+dist/
+build/icon.png
