@@ -7,6 +7,12 @@
 // Собирается только фронтенд (vite build) — серверная часть в десктопном
 // режиме не нужна: распознавание и модели работают в браузерном движке.
 //
+// ВАЖНО: в steno_vibe фронтенд-библиотеки (react, radix, transformers.js…)
+// лежат в dependencies, а не в devDependencies — ставим всё.
+//
+// CI собирает на Node 20: npm 10.9 (из Node 22) падает на этом дереве
+// зависимостей с «Exit handler never called!», npm 10.8 (Node 20) — стабилен.
+//
 // Окружение:
 //   STENO_WEB_REPO — URL репозитория веб-версии (по умолчанию steno_vibe)
 
@@ -19,14 +25,10 @@ const SRC = path.join(ROOT, '.web-src')
 const OUT = path.join(ROOT, 'web', 'dist')
 const REPO = process.env.STENO_WEB_REPO || 'https://github.com/lolobrigit/steno_vibe.git'
 
-// npm на GH Actions периодически падает с «Exit handler never called!»;
-// отключаем самые хрупкие части.
 const NPM_ENV = {
   ...process.env,
   npm_config_audit: 'false',
   npm_config_fund: 'false',
-  npm_config_foreground_scripts: 'true',
-  npm_config_prefer_online: 'true',
 }
 
 function tryRun(cmd, cwd, env = process.env) {
@@ -55,34 +57,17 @@ function copyDir(from, to) {
 }
 
 /**
- * Установка зависимостей веб-приложения.
- * Стратегия 1: только фронтенд-зависимости (devDependencies) — меньше пакетов,
- *   меньше шансов на баги npm; серверные (hono, drizzle, mysql2…) не нужны.
- * Стратегия 2: полный npm install с чистого листа.
- * Между попытками node_modules удаляется полностью — повторная установка
- * поверх грязного дерева падает с ENOTEMPTY.
+ * Полная установка зависимостей с повторами. Перед каждой попыткой
+ * node_modules чистится — установка поверх грязного дерева падает с ENOTEMPTY.
+ * --ignore-scripts: postinstall (native-бинарники серверной части)
+ * для vite build не нужны.
  */
 function installDeps() {
-  const pkgPath = path.join(SRC, 'package.json')
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
   const nm = () => fs.rmSync(path.join(SRC, 'node_modules'), { recursive: true, force: true })
-
-  // Vite 7 тянет rollup native-бинарник; на Node 22 ставим Vite 6 — быстрее и без native
-  pkg.dependencies = { ...(pkg.dependencies || {}), vite: '^6.3.5' }
-
   for (const attempt of [1, 2, 3]) {
     nm()
-    if (attempt === 1) {
-      const minimal = { ...pkg, dependencies: { vite: '^6.3.5' } }
-      fs.writeFileSync(pkgPath, JSON.stringify(minimal, null, 2))
-      console.log('— попытка 1: только фронтенд-зависимости (devDependencies)…')
-      if (tryRun('npm install --ignore-scripts', SRC, NPM_ENV)) return
-      console.warn('не вышло, пробуем полную установку')
-    } else {
-      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2))
-      console.log(`— попытка ${attempt}: полный npm install…`)
-      if (tryRun('npm install --ignore-scripts', SRC, NPM_ENV)) return
-    }
+    console.log(`— установка зависимостей, попытка ${attempt}/3…`)
+    if (tryRun('npm install --ignore-scripts', SRC, NPM_ENV)) return
     if (attempt < 3) execSync('sleep 10')
   }
   throw new Error('npm install: все попытки исчерпаны')
@@ -102,7 +87,6 @@ function main() {
     fs.rmSync(SRC, { recursive: true, force: true })
     run(`git clone --depth 1 ${REPO} "${SRC}"`, ROOT)
   }
-  fs.rmSync(path.join(SRC, 'node_modules'), { recursive: true, force: true })
 
   installDeps()
 
