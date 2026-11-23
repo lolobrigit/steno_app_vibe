@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; img-src 'self' data:"
+    />
+    <title>STENO — быстрая запись</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Быстрая запись</h1>
+      <p class="hint">Выберите, что записывать</p>
+    </header>
+
+    <!-- выбор режима -->
+    <section id="modes" class="grid">
+      <button class="mode" data-mode="mic">
+        <span class="ico">🎙</span>Микрофон
+      </button>
+      <button class="mode" data-mode="system">
+        <span class="ico">🔊</span>Системный звук
+      </button>
+      <button class="mode" data-mode="screen">
+        <span class="ico">🖥</span>Экран (видео)
+      </button>
+      <button class="mode" data-mode="window">
+        <span class="ico">🗔</span>Окно (видео)
+      </button>
+      <button class="mode" data-mode="camera">
+        <span class="ico">📷</span>Камера
+      </button>
+    </section>
+
+    <!-- выбор конкретного экрана/окна -->
+    <section id="sources" class="hidden">
+      <h2 id="sources-title">Выберите источник</h2>
+      <div id="source-list" class="sources"></div>
+      <label class="row" id="sys-audio-row">
+        <input type="checkbox" id="with-audio" checked />
+        со звуком системы <span class="muted">(Windows)</span>
+      </label>
+      <label class="row">
+        <input type="checkbox" id="with-mic" />
+        + микрофон
+      </label>
+      <button id="back-to-modes" class="ghost">← Назад</button>
+    </section>
+
+    <!-- запись -->
+    <section id="recording" class="hidden">
+      <div class="rec-dot"></div>
+      <div id="rec-time" class="time">00:00</div>
+      <video id="preview" class="hidden" autoplay muted playsinline></video>
+      <div class="row center">
+        <button id="stop-rec" class="danger">■ Остановить</button>
+        <button id="cancel-rec" class="ghost">Отмена</button>
+      </div>
+    </section>
+
+    <!-- готово -->
+    <section id="done" class="hidden">
+      <h2>Запись сохранена</h2>
+      <p id="saved-path" class="path"></p>
+      <button id="send-to-app" class="primary">Отправить на расшифровку</button>
+      <div class="row center">
+        <button id="open-folder" class="ghost">Открыть папку</button>
+        <button id="again" class="ghost">Ещё запись</button>
+      </div>
+    </section>
+
+    <p id="error" class="error hidden"></p>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
