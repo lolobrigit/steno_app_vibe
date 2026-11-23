@@ -78,7 +78,14 @@ function installDeps() {
   const nm = () => fs.rmSync(path.join(SRC, 'node_modules'), { recursive: true, force: true })
 
   // ── путь 1: pnpm через corepack ──
+  // shamefully-hoist: pnpm по умолчанию не выставляет транзитивные
+  // зависимости (onnxruntime-web от transformers.js) на верхний уровень,
+  // а воркеры веб-приложения импортируют их напрямую → Rollup не резолвит.
   nm()
+  fs.writeFileSync(
+    path.join(SRC, '.npmrc'),
+    'ignore-scripts=true\naudit=false\nfund=false\nshamefully-hoist=true\n',
+  )
   console.log('— включаем corepack/pnpm…')
   if (tryRun('corepack enable && corepack prepare pnpm@9.15.4 --activate', ROOT, NPM_ENV)) {
     for (const attempt of [1, 2]) {
