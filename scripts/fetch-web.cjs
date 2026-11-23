@@ -6,6 +6,9 @@
 //
 // Собирается только фронтенд (vite build) — серверная часть в десктопном
 // режиме не нужна: распознавание и модели работают в браузерном движке.
+//
+// Окружение:
+//   STENO_WEB_REPO — URL репозитория веб-версии (по умолчанию steno_vibe)
 
 const { execSync } = require('child_process')
 const fs = require('fs')
@@ -14,11 +17,23 @@ const path = require('path')
 const ROOT = path.join(__dirname, '..')
 const SRC = path.join(ROOT, '.web-src')
 const OUT = path.join(ROOT, 'web', 'dist')
-const REPO = 'https://github.com/lolobrigit/steno_vibe.git'
+const REPO = process.env.STENO_WEB_REPO || 'https://github.com/lolobrigit/steno_vibe.git'
 
-function run(cmd, cwd) {
+function run(cmd, cwd, retries = 0) {
   console.log(`$ ${cmd}`)
-  execSync(cmd, { cwd, stdio: 'inherit' })
+  for (let attempt = 0; ; attempt++) {
+    try {
+      execSync(cmd, { cwd, stdio: 'inherit' })
+      return
+    } catch (e) {
+      if (attempt < retries) {
+        console.warn(`команда упала, повтор ${attempt + 1}/${retries} через 5 с…`)
+        execSync('sleep 5')
+      } else {
+        throw e
+      }
+    }
+  }
 }
 
 function copyDir(from, to) {
@@ -48,8 +63,15 @@ function main() {
     run(`git clone --depth 1 ${REPO} "${SRC}"`, ROOT)
   }
 
-  run('npm install', SRC)
-  run('npx vite build', SRC) // BASE_PATH не задаём — base '/' под наш локальный сервер
+  // установка зависимостей веб-приложения:
+  // --ignore-scripts — без postinstall (native-бинарники не нужны для vite build;
+  //   это также обходит баг npm «Exit handler never called!» на GH Actions);
+  // --no-audit/--no-fund — меньше сетевых запросов, быстрее и стабильнее;
+  // 2 повтора — на случай флаки-сети на раннерах.
+  run('npm install --ignore-scripts --no-audit --no-fund', SRC, 2)
+
+  // BASE_PATH не задаём — base '/' под наш локальный сервер
+  run('npx vite build', SRC)
 
   const distPublic = path.join(SRC, 'dist', 'public')
   if (!fs.existsSync(path.join(distPublic, 'index.html'))) {
