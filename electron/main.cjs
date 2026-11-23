@@ -1,13 +1,13 @@
 // Точка входа главного процесса STENO Desktop.
 //
-// Покрывает требования к нативному приложению:
 //  1. Веб-версия внутри: локальная сборка (web/dist через встроенный сервер)
 //     или удалённый URL (по умолчанию https://vlcast.com/whisper).
 //  2. Сворачивание в трей / панель (minimizeToTray).
 //  3. Захват звука/видео: микрофон, системный звук (WASAPI loopback на
-//     Windows), экран/окно/камера — см. setDisplayMediaRequestHandler и
-//     quickstart-окно.
-//  4/5. Трей: левая кнопка — быстрый старт записи, правая — меню (tray.cjs).
+//     Windows), экран/окно/камера. Из главного окна источник выбирается
+//     в окне-выборщике (picker), из quickstart — заранее (pendingCapture).
+//  4/5. Трей: левая кнопка — быстрый старт, двойной клик — главное окно,
+//     правая — меню; во время записи иконка моргает красной точкой.
 //  6. Модели по прямым ссылкам в выбранную папку (models.cjs) + подстановка
 //     локальных файлов вместо сети (installModelInterceptor).
 //  7. Ленивая загрузка моделей в GPU/CPU — со стороны веб-приложения;
@@ -21,19 +21,28 @@ const { Settings } = require('./settings.cjs')
 const { Downloads, urlToRelPath } = require('./models.cjs')
 const { createTray } = require('./tray.cjs')
 const { startStaticServer } = require('./server.cjs')
+const { tr } = require('./i18n.cjs')
 
 const isMac = process.platform === 'darwin'
 const isWin = process.platform === 'win32'
 
 let settings
 let downloads
+let trayApi = null
 let mainWindow = null
 let quickWindow = null
+let pickerWindow = null
+let pickerResolve = null
 let localServer = null
 let quitting = false
+/** идёт запись (quickstart сообщает через steno:rec-state) */
+let recActive = false
 
 /** Ожидающий запрос захвата: какой источник отдать в getDisplayMedia. */
 let pendingCapture = null // {sourceId?: string, audio: boolean}
+
+const iconPath = (name) => path.join(__dirname, '..', 'build', name)
+const L = () => tr(app, settings).s
 
 // ─── одна копия приложения ────────────────────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock()
@@ -48,8 +57,6 @@ if (!gotLock) {
 // ─── перехват загрузок моделей HF → локальная папка ───────────────────────────
 // Если файл уже лежит в modelsDir по «родному» пути репозитория
 // (owner/model/resolve/rev/file), отдаём его вместо скачивания из сети.
-// Это и есть «модели можно загрузить предварительно по прямым ссылкам»:
-// качалка models.cjs складывает файлы ровно по этим путям.
 function installModelInterceptor() {
   const ses = session.defaultSession
   ses.protocol.handle('https', async (req) => {
@@ -97,32 +104,69 @@ function corsHeaders(extra) {
 }
 
 // ─── захват экрана/окна/звука для getDisplayMedia ────────────────────────────
-// Веб-приложение вызывает getDisplayMedia (запись экрана) — здесь выбираем
-// источник. Если quickstart заранее указал источник (pendingCapture), берём
-// его; иначе — первый экран. Системный звук: 'loopback' работает на Windows
-// (WASAPI loopback); на macOS нужен виртуальный драйвер (BlackHole), на Linux
-// зависит от PipeWire/PulseAudio.
+// Порядок выбора источника:
+//  - quickstart заранее указал источник (pendingCapture) — берём его;
+//  - иначе (главное окно, кнопка «запись экрана» в веб-приложении) —
+//    показываем окно-выборщик источника и ждём выбора пользователя.
+// Системный звук: 'loopback' работает на Windows (WASAPI loopback);
+// на macOS нужен виртуальный драйвер (BlackHole), на Linux — PipeWire/PulseAudio.
 function installDisplayMediaHandler() {
   const { desktopCapturer } = require('electron')
   session.defaultSession.setDisplayMediaRequestHandler((req, callback) => {
     const want = pendingCapture
     pendingCapture = null
-    desktopCapturer
-      .getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } })
-      .then((sources) => {
-        let source = null
-        if (want?.sourceId) source = sources.find((s) => s.id === want.sourceId) || null
-        if (!source) source = sources.find((s) => s.id.startsWith('screen')) || sources[0]
-        if (!source) return callback({})
-        const withAudio = want ? want.audio : true
-        if (withAudio && isWin) {
-          callback({ video: source, audio: 'loopback' })
-        } else {
-          // macOS: системный звук без драйвера недоступен — только видео
-          callback({ video: source })
-        }
+
+    const serve = (sourceId, withAudio) => {
+      desktopCapturer
+        .getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } })
+        .then((sources) => {
+          let source = null
+          if (sourceId) source = sources.find((s) => s.id === sourceId) || null
+          if (!source) source = sources.find((s) => s.id.startsWith('screen')) || sources[0]
+          if (!source) return callback({})
+          if (withAudio && isWin) callback({ video: source, audio: 'loopback' })
+          else callback({ video: source })
+        })
+        .catch(() => callback({}))
+    }
+
+    if (want) {
+      serve(want.sourceId, want.audio)
+      return
+    }
+    // источник не выбран заранее — спрашиваем пользователя
+    openSourcePicker()
+      .then((choice) => {
+        if (!choice) return callback({})
+        serve(choice.sourceId, choice.audio)
       })
       .catch(() => callback({}))
+  })
+}
+
+/** Окно-выборщик источника для записи экрана из главного окна. */
+function openSourcePicker() {
+  return new Promise((resolve) => {
+    if (pickerResolve) pickerResolve(null) // старый запрос отменяем
+    pickerResolve = resolve
+    pickerWindow = new BrowserWindow({
+      width: 560,
+      height: 520,
+      resizable: true,
+      minimizable: false,
+      autoHideMenuBar: true,
+      title: L().pickerTitle,
+      icon: iconPath('icon.png'),
+      webPreferences: webPreferences(),
+    })
+    pickerWindow.loadFile(path.join(__dirname, '..', 'quickstart', 'picker.html'))
+    pickerWindow.on('closed', () => {
+      pickerWindow = null
+      if (pickerResolve) {
+        pickerResolve(null)
+        pickerResolve = null
+      }
+    })
   })
 }
 
@@ -157,7 +201,7 @@ async function createMainWindow(startHidden) {
     minHeight: 640,
     show: !startHidden,
     autoHideMenuBar: true,
-    icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    icon: iconPath('icon.png'),
     webPreferences: webPreferences(),
   })
 
@@ -191,11 +235,16 @@ function showMainWindow() {
   mainWindow.focus()
 }
 
-/** Быстрый старт: компактное окно записи рядом с треем. */
+/**
+ * Быстрый старт: компактное окно записи рядом с треем.
+ * Если окно уже есть — показываем его (идущая запись не теряется,
+ * состояние живёт в рендерере). Потеря фокуса: во время записи окно
+ * прячется в трей (иконка моргает), в простое — закрывается.
+ */
 function toggleQuickWindow(anchorBounds) {
   if (quickWindow) {
-    quickWindow.close()
-    quickWindow = null
+    if (quickWindow.isVisible()) quickWindow.focus()
+    else quickWindow.show()
     return
   }
   const width = 420
@@ -219,14 +268,17 @@ function toggleQuickWindow(anchorBounds) {
     alwaysOnTop: true,
     skipTaskbar: true,
     autoHideMenuBar: true,
-    title: 'STENO — быстрая запись',
-    icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    title: L().quickTitle,
+    icon: iconPath('icon.png'),
     webPreferences: webPreferences(),
   })
   quickWindow.loadFile(path.join(__dirname, '..', 'quickstart', 'index.html'))
   quickWindow.on('blur', () => {
-    // клик мимо — закрыть (как системное меню)
-    if (quickWindow && !quickWindow.webContents.isDevToolsOpened()) {
+    if (!quickWindow || quickWindow.webContents.isDevToolsOpened()) return
+    if (recActive) {
+      // идёт запись — не закрываем, прячем; в трее моргает индикатор
+      quickWindow.hide()
+    } else {
       quickWindow.close()
     }
   })
@@ -246,6 +298,34 @@ function navigate(target) {
   }
 }
 
+/** Пересоздать трей (смена языка меню). */
+function rebuildTray() {
+  const { lang, s } = tr(app, settings)
+  const wasRecording = trayApi?.isRecording() || false
+  if (trayApi) trayApi.tray.destroy()
+  trayApi = createTray({
+    trayIconPath: iconPath('icon.png'),
+    trayIconRecPath: iconPath('icon-rec.png'),
+    labels: s,
+    lang,
+    onQuickStart: (bounds) => toggleQuickWindow(bounds),
+    onOpen: () => showMainWindow(),
+    onNavigate: (target) => navigate(target),
+    onUnloadModels: () => {
+      if (mainWindow) mainWindow.webContents.send('steno:unload-models')
+    },
+    onLanguage: (lang2) => {
+      settings.set('language', lang2)
+      rebuildTray()
+    },
+    onQuit: () => {
+      quitting = true
+      app.quit()
+    },
+  })
+  if (wasRecording) trayApi.setRecording(true)
+}
+
 // ─── IPC ──────────────────────────────────────────────────────────────────────
 function recordingsRoot() {
   return settings.get('recordingsDir') || path.join(app.getPath('videos') || app.getPath('userData'), 'STENO')
@@ -258,6 +338,7 @@ function installIpc() {
     platform: process.platform,
     version: app.getVersion(),
     recordingsDir: recordingsRoot(),
+    language: tr(app, settings).lang,
   }))
 
   ipcMain.handle('steno:set', (_e, key, value) => {
@@ -265,6 +346,7 @@ function installIpc() {
     if (key === 'autoLaunch') {
       app.setLoginItemSettings({ openAtLogin: Boolean(value), openAsHidden: true })
     }
+    if (key === 'language') rebuildTray()
     return settings.all()
   })
 
@@ -272,7 +354,7 @@ function installIpc() {
     const win = BrowserWindow.fromWebContents(_e.sender)
     const r = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory'],
-      title: which === 'modelsDir' ? 'Папка для моделей' : 'Папка для записей',
+      title: which === 'modelsDir' ? L().modelsDirDialog : L().recordingsDirDialog,
     })
     if (r.canceled || !r.filePaths[0]) return null
     settings.set(which, r.filePaths[0])
@@ -285,7 +367,7 @@ function installIpc() {
   ipcMain.handle('steno:download-resume', (_e, id) => downloads.resume(String(id)))
   ipcMain.handle('steno:download-clear-done', () => downloads.removeDone())
 
-  // источники захвата для quickstart
+  // источники захвата для quickstart и picker
   ipcMain.handle('steno:list-sources', async () => {
     const { desktopCapturer } = require('electron')
     const sources = await desktopCapturer.getSources({
@@ -305,6 +387,21 @@ function installIpc() {
   // quickstart выбрал источник → следующий getDisplayMedia получит его
   ipcMain.handle('steno:request-capture', (_e, sourceId, audio) => {
     pendingCapture = { sourceId: sourceId || null, audio: Boolean(audio) }
+  })
+
+  // выбор в окне-выборщике (запись экрана из главного окна)
+  ipcMain.on('steno:picker-choice', (_e, sourceId, audio) => {
+    const resolve = pickerResolve
+    pickerResolve = null
+    if (pickerWindow) pickerWindow.close()
+    pickerWindow = null
+    if (resolve) resolve(sourceId ? { sourceId: String(sourceId), audio: Boolean(audio) } : null)
+  })
+
+  // индикация записи в трее (quickstart сообщает старт/стоп)
+  ipcMain.on('steno:rec-state', (_e, on) => {
+    recActive = Boolean(on)
+    trayApi?.setRecording(recActive)
   })
 
   // сохранение записи из quickstart в папку записей
@@ -353,20 +450,7 @@ app.whenReady().then(async () => {
   installModelInterceptor()
   installDisplayMediaHandler()
   installIpc()
-
-  createTray({
-    trayIconPath: path.join(__dirname, '..', 'build', 'icon.png'),
-    onQuickStart: (bounds) => toggleQuickWindow(bounds),
-    onOpen: () => showMainWindow(),
-    onNavigate: (target) => navigate(target),
-    onUnloadModels: () => {
-      if (mainWindow) mainWindow.webContents.send('steno:unload-models')
-    },
-    onQuit: () => {
-      quitting = true
-      app.quit()
-    },
-  })
+  rebuildTray()
 
   if (settings.get('autoLaunch')) {
     app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true })

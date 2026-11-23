@@ -19,6 +19,8 @@ const DEFAULTS = {
   autoLaunch: false,
   /** стартовать свёрнутым в трей */
   startMinimized: false,
+  /** язык приложения и меню трея: 'ru' | 'en' | null (= локаль ОС) */
+  language: null,
 }
 
 class Settings {

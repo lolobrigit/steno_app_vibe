@@ -202,3 +202,17 @@ button.ghost {
   font-size: 12px;
   user-select: text;
 }
+
+/* выборщик источника (picker) */
+.sources.tall {
+  max-height: 340px;
+}
+
+.tab {
+  opacity: 0.6;
+}
+
+.tab.active {
+  opacity: 1;
+  border-color: var(--accent);
+}

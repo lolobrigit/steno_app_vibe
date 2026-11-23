@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>STENO — выбор источника</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1 id="title">Выберите, что записывать</h1>
+      <p class="hint" id="hint">Экран или окно — для записи из основного окна</p>
+    </header>
+
+    <div class="row" role="tablist">
+      <button class="ghost tab active" id="tab-screens">Экраны</button>
+      <button class="ghost tab" id="tab-windows">Окна</button>
+    </div>
+
+    <div id="source-list" class="sources tall"></div>
+
+    <label class="row" id="sys-audio-row">
+      <input type="checkbox" id="with-audio" checked />
+      <span id="sys-audio-label">со звуком системы</span> <span class="muted">(Windows)</span>
+    </label>
+
+    <div class="row center">
+      <button id="cancel" class="ghost">Отмена</button>
+    </div>
+
+    <script src="picker.js"></script>
+  </body>
+</html>

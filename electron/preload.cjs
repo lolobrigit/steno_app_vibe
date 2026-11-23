@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld('stenoNative', {
   requestCapture: (sourceId, audio) =>
     ipcRenderer.invoke('steno:request-capture', sourceId, audio),
 
+  // окно-выборщик источника (запись экрана из главного окна)
+  pickerChoice: (sourceId, audio) => ipcRenderer.send('steno:picker-choice', sourceId, audio),
+
+  // индикация записи в трее (моргающая красная точка)
+  reportRecState: (on) => ipcRenderer.send('steno:rec-state', on),
+
   // записи quickstart
   saveRecording: (name, buffer) => ipcRenderer.invoke('steno:save-recording', name, buffer),
   injectFile: (filePath) => ipcRenderer.invoke('steno:inject-file', filePath),
